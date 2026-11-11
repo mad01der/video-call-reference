@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>视频通话</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Noto Sans SC", sans-serif;
+      background: #eef2f7;
+      color: #1c2430;
+    }
+    header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px 18px 8px;
+    }
+    header h1 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: 0.02em; }
+    header p { margin: 0; color: #5c6b80; font-size: 13px; text-align: right; }
+    main { padding: 8px 14px 24px; display: grid; gap: 12px; }
+    button {
+      width: 100%;
+      border: 0;
+      border-radius: 12px;
+      padding: 14px 16px;
+      font-size: 18px;
+      background: #1f4e9e;
+      color: white;
+    }
+    button:disabled { background: #9aafd0; }
+    .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .controls button { font-size: 16px; padding: 12px; }
+    .controls button.off {
+      background: white;
+      color: #1f4e9e;
+      box-shadow: inset 0 0 0 1.5px #1f4e9e;
+    }
+    #status { margin: 0 2px; min-height: 1.4em; font-size: 15px; color: #3d4b60; }
+    .stage {
+      background: white;
+      border-radius: 16px;
+      padding: 10px;
+      box-shadow: 0 8px 24px rgba(24, 48, 88, 0.08);
+    }
+    .frame {
+      position: relative;
+      background: #111;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    video {
+      display: block;
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      background: #111;
+      object-fit: contain;
+    }
+    .cap {
+      position: absolute;
+      left: 10px;
+      bottom: 10px;
+      margin: 0;
+      padding: 4px 8px;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.55);
+      color: white;
+      font-size: 13px;
+    }
+    .local {
+      position: fixed;
+      width: 2px;
+      height: 2px;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .stats div {
+      background: white;
+      border-radius: 12px;
+      padding: 10px 8px 8px;
+      text-align: center;
+      box-shadow: 0 8px 24px rgba(24, 48, 88, 0.06);
+    }
+    .stats span { display: block; color: #6b7a8d; font-size: 12px; }
+    .stats b {
+      display: block;
+      margin-top: 4px;
+      font-size: 16px;
+      font-weight: 650;
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>视频通话</h1>
+    <p id="mode">正在读取连接方式…</p>
+  </header>
+  <main>
+    <button id="start" type="button">开始通话</button>
+    <p id="status">点「开始通话」，并允许使用摄像头和麦克风。</p>
+    <section class="stage">
+      <div class="frame">
+        <video id="remote" autoplay playsinline></video>
+        <p class="cap">电脑画面</p>
+      </div>
+    </section>
+    <section class="controls" aria-label="音频">
+      <button id="mic" type="button" aria-pressed="true">麦克风</button>
+      <button id="spk" type="button" aria-pressed="true">扬声器</button>
+    </section>
+    <section class="stats" aria-label="电脑画面参数">
+      <div><span>帧率</span><b id="fps">—</b></div>
+      <div><span>分辨率</span><b id="res">—</b></div>
+      <div><span>丢包</span><b id="lost">—</b></div>
+      <div><span>丢包率</span><b id="loss">—</b></div>
+      <div><span>码率</span><b id="rate">—</b></div>
+      <div><span>编码</span><b id="codec">—</b></div>
+    </section>
+  </main>
+  <video id="local" class="local" autoplay playsinline muted></video>
+  <audio id="remote-audio" autoplay playsinline></audio>
+  <script>
+    const startBtn = document.querySelector("#start");
+    const statusEl = document.querySelector("#status");
+    const modeEl = document.querySelector("#mode");
+    const localVideo = document.querySelector("#local");
+    const remoteVideo = document.querySelector("#remote");
+    const remoteAudio = document.querySelector("#remote-audio");
+    const fpsEl = document.querySelector("#fps");
+    const resEl = document.querySelector("#res");
+    const lostEl = document.querySelector("#lost");
+    const lossEl = document.querySelector("#loss");
+    const rateEl = document.querySelector("#rate");
+    const codecEl = document.querySelector("#codec");
+    const micBtn = document.querySelector("#mic");
+    const spkBtn = document.querySelector("#spk");
+    let localStream = null;
+    let micOn = true;
+    let spkOn = true;
+
+    function paintPhoneAudio() {
+      micBtn.classList.toggle("off", !micOn);
+      micBtn.setAttribute("aria-pressed", micOn ? "true" : "false");
+      micBtn.textContent = micOn ? "麦克风" : "麦克风已关";
+      spkBtn.classList.toggle("off", !spkOn);
+      spkBtn.setAttribute("aria-pressed", spkOn ? "true" : "false");
+      spkBtn.textContent = spkOn ? "扬声器" : "扬声器已关";
+      remoteAudio.muted = !spkOn;
+      if (localStream) localStream.getAudioTracks().forEach((t) => { t.enabled = micOn; });
+    }
+    micBtn.addEventListener("click", () => { micOn = !micOn; paintPhoneAudio(); });
+    spkBtn.addEventListener("click", () => {
+      spkOn = !spkOn;
+      paintPhoneAudio();
+      if (spkOn) remoteAudio.play().catch(() => {});
+    });
+
+    const iceLabel = {
+      new: "准备连通",
+      checking: "正在找通路",
+      connected: "通话中",
+      completed: "通话中",
+      disconnected: "通路中断",
+      failed: "没有找到通路。请确认手机和电脑在同一个无线网络。",
+      closed: "已关闭",
+    };
+
+    let cfg = { relay: false };
+    let pc = null;
+    let prevBytes = 0;
+    let prevTime = 0;
+
+    function setStatus(text) { statusEl.textContent = text; }
+
+    function cameraError(e) {
+      if (e && e.name === "NotAllowedError") return "没有允许使用摄像头";
+      if (e && e.name === "NotFoundError") return "没有找到摄像头";
+      if (e && (e.name === "SecurityError" || e.name === "NotSupportedError")) {
+        return "这个地址不能打开摄像头。请用终端里打印的 https 地址打开。";
+      }
+      return (e && e.message) || String(e);
+    }
+
+    function preferOpus(transceiver) {
+      try {
+        if (!RTCRtpSender.getCapabilities || !transceiver.setCodecPreferences) return;
+        const caps = RTCRtpSender.getCapabilities("audio");
+        if (!caps) return;
+        const opus = caps.codecs.filter((c) => c.mimeType.toLowerCase() === "audio/opus");
+        const rest = caps.codecs.filter((c) => c.mimeType.toLowerCase() !== "audio/opus");
+        if (opus.length) transceiver.setCodecPreferences(opus.concat(rest));
+      } catch (e) { /* 部分手机浏览器不接受调整后的编码列表 */ }
+    }
+
+    function codecLines(kind) {
+      const lines = [];
+      for (const [name, api] of [["发送", RTCRtpSender], ["接收", RTCRtpReceiver]]) {
+        if (!api || !api.getCapabilities) continue;
+        const caps = api.getCapabilities(kind);
+        if (!caps) continue;
+        for (const c of caps.codecs) {
+          lines.push(name + " " + c.mimeType + (c.sdpFmtpLine ? " " + c.sdpFmtpLine : ""));
+        }
+      }
+      return lines;
+    }
+
+    function reportCodecs(extra) {
+      const body = codecLines("video").concat(codecLines("audio"), extra || []).join("\n");
+      fetch("/codecs", { method: "POST", body }).catch(() => {});
+    }
+
+    function h264Score(c) {
+      const f = c.sdpFmtpLine || "";
+      let score = 0;
+      if (f.indexOf("packetization-mode=1") >= 0) score += 4;
+      if (f.indexOf("42e01f") >= 0 || f.indexOf("42001f") >= 0) score += 2;
+      return score;
+    }
+
+    function videoCapsWithH264() {
+      for (const api of [RTCRtpSender, RTCRtpReceiver]) {
+        if (!api.getCapabilities) continue;
+        const caps = api.getCapabilities("video");
+        if (caps && caps.codecs.some((c) => c.mimeType.toLowerCase() === "video/h264")) return caps;
+      }
+      return null;
+    }
+
+    function offerH264(sdp) {
+      const eol = sdp.includes("\r\n") ? "\r\n" : "\n";
+      const used = new Set();
+      for (const found of sdp.matchAll(/a=rtpmap:(\d+)/g)) used.add(Number(found[1]));
+      const pts = [];
+      let next = 102;
+      while (pts.length < 2) {
+        if (!used.has(next)) pts.push(next);
+        next++;
+      }
+      const profiles = ["42e034", "42e01f"];
+      const extra = [];
+      pts.forEach((pt, i) => {
+        extra.push(
+          "a=rtpmap:" + pt + " H264/90000",
+          "a=rtcp-fb:" + pt + " goog-remb",
+          "a=rtcp-fb:" + pt + " transport-cc",
+          "a=rtcp-fb:" + pt + " ccm fir",
+          "a=rtcp-fb:" + pt + " nack",
+          "a=rtcp-fb:" + pt + " nack pli",
+          "a=fmtp:" + pt + " level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=" + profiles[i],
+        );
+      });
+      const lines = sdp.split(eol);
+      const out = [];
+      for (const line of lines) {
+        if (line.startsWith("m=video ")) {
+          const parts = line.split(" ");
+          out.push(parts.slice(0, 3).concat(pts.map(String), parts.slice(3)).join(" "));
+          out.push(extra.join(eol));
+          continue;
+        }
+        out.push(line);
+      }
+      return out.join(eol);
+    }
+
+    function applyH264(transceiver) {
+      if (!transceiver.setCodecPreferences) return false;
+      const caps = videoCapsWithH264();
+      if (!caps) return false;
+      const h264 = caps.codecs.filter((c) => c.mimeType.toLowerCase() === "video/h264");
+      h264.sort((a, b) => h264Score(b) - h264Score(a));
+      const pts = new Set(h264.map((c) => String(c.preferredPayloadType ?? "")));
+      const rtx = caps.codecs.filter((c) => {
+        if (c.mimeType.toLowerCase() !== "video/rtx") return false;
+        const found = /apt=(\d+)/.exec(c.sdpFmtpLine || "");
+        return found && pts.has(found[1]);
+      });
+      const rest = caps.codecs.filter((c) => c.mimeType.toLowerCase() !== "video/h264");
+      const lists = [h264.concat(rtx), h264.concat(rest)];
+      for (const list of lists) {
+        if (!list.length) continue;
+        try {
+          transceiver.setCodecPreferences(list);
+          reportCodecs(["选用 " + list.map((c) => c.mimeType + (c.sdpFmtpLine ? " " + c.sdpFmtpLine : "")).join(" | ")]);
+          return true;
+        } catch (e) { /* 这个列表不被接受，试下一种 */ }
+      }
+      return false;
+    }
+
+    function watchRemote() {
+      const canvas = document.createElement("canvas");
+      canvas.width = 32;
+      canvas.height = 32;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      window.setInterval(() => {
+        if (!remoteVideo.videoWidth) return;
+        try {
+          ctx.drawImage(remoteVideo, 0, 0, 32, 32);
+          const px = ctx.getImageData(0, 0, 32, 32).data;
+          let sum = 0;
+          for (let i = 0; i < px.length; i += 4) sum += px[i] + px[i + 1] + px[i + 2];
+          if (sum > 500 && !watchRemote.seen) {
+            watchRemote.seen = true;
+            setStatus("通话中");
+          }
+          fetch("/recv-level", { method: "POST", body: String(sum) }).catch(() => {});
+        } catch (e) { /* 有的浏览器不允许读这一帧 */ }
+      }, 1000);
+    }
+
+    function showStats(inbound, codecs) {
+      const fps = Number(inbound.framesPerSecond);
+      fpsEl.textContent = Number.isFinite(fps) && fps > 0 ? String(Math.round(fps)) : "—";
+      const w = inbound.frameWidth;
+      const h = inbound.frameHeight;
+      resEl.textContent = w && h ? w + "×" + h : "—";
+      const lost = inbound.packetsLost || 0;
+      const recv = inbound.packetsReceived || 0;
+      lostEl.textContent = String(lost);
+      const total = lost + recv;
+      lossEl.textContent = total > 0 ? (lost / total * 100).toFixed(1) + "%" : "0.0%";
+      const now = inbound.timestamp;
+      const bytes = inbound.bytesReceived || 0;
+      if (prevTime && now > prevTime) {
+        const kbps = (bytes - prevBytes) * 8 / (now - prevTime);
+        rateEl.textContent = kbps >= 1000 ? (kbps / 1000).toFixed(1) + " Mbps" : Math.round(kbps) + " kbps";
+      }
+      prevBytes = bytes;
+      prevTime = now;
+      let name = "";
+      if (inbound.codecId && codecs.get(inbound.codecId)) {
+        const mime = codecs.get(inbound.codecId).mimeType || "";
+        name = mime.replace("video/", "").toUpperCase();
+      }
+      codecEl.textContent = name || "—";
+    }
+
+    async function pollStats() {
+      if (!pc) return;
+      try {
+        const report = await pc.getStats();
+        let inbound = null;
+        report.forEach((s) => {
+          if (s.type === "inbound-rtp" && (s.kind === "video" || s.mediaType === "video")) inbound = s;
+        });
+        if (!inbound) return;
+        showStats(inbound, report);
+      } catch (e) { /* 通话还没建立时没有统计 */ }
+    }
+
+    async function start() {
+      startBtn.disabled = true;
+      setStatus("正在打开摄像头…");
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true },
+          video: {
+            facingMode: "user",
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            frameRate: { ideal: 24, max: 30 },
+          },
+        });
+      } catch (e) {
+        setStatus(cameraError(e));
+        startBtn.disabled = false;
+        return;
+      }
+      localStream = stream;
+      paintPhoneAudio();
+      localVideo.srcObject = stream;
+      await localVideo.play().catch(() => {});
+      if (navigator.wakeLock) navigator.wakeLock.request("screen").catch(() => {});
+
+      const ice = cfg.relay
+        ? { iceServers: [{ urls: cfg.turnURL, username: cfg.username, credential: cfg.credential }], iceTransportPolicy: "relay" }
+        : { iceServers: [] };
+      pc = new RTCPeerConnection(ice);
+      prevBytes = 0;
+      prevTime = 0;
+      pc.ontrack = (ev) => {
+        if (ev.track.kind === "audio") {
+          remoteAudio.srcObject = ev.streams[0];
+          remoteAudio.play().catch(() => {});
+          return;
+        }
+        remoteVideo.srcObject = ev.streams[0];
+        remoteVideo.play().catch(() => {});
+      };
+      pc.oniceconnectionstatechange = () => setStatus(iceLabel[pc.iceConnectionState] || pc.iceConnectionState);
+
+      const tracks = stream.getVideoTracks().concat(stream.getAudioTracks());
+      let videoTr = null;
+      for (const track of tracks) {
+        const sender = pc.addTrack(track, stream);
+        const transceiver = pc.getTransceivers().find((t) => t.sender === sender);
+        if (!transceiver) continue;
+        transceiver.direction = "sendrecv";
+        if (track.kind === "audio") preferOpus(transceiver);
+        else {
+          videoTr = transceiver;
+          applyH264(transceiver);
+          const params = sender.getParameters();
+          params.degradationPreference = "maintain-framerate";
+          sender.setParameters(params).catch(() => {});
+        }
+      }
+      const raw = await pc.createOffer();
+      const h264Offer = offerH264(raw.sdp);
+      try {
+        await pc.setLocalDescription({ type: "offer", sdp: h264Offer });
+      } catch (e) {
+        fetch("/codecs", { method: "POST", body: "H264 描述被浏览器拒绝 " + ((e && e.message) || e) }).catch(() => {});
+        if (pc.localDescription) throw e;
+        await pc.setLocalDescription(raw);
+      }
+      const maps = (pc.localDescription.sdp.match(/a=rtpmap:\d+ [^\r\n]+/g) || []).join(" | ");
+      fetch("/codecs", { method: "POST", body: "实际提供 " + maps }).catch(() => {});
+      setStatus("正在收集通路…");
+      await new Promise((resolve) => {
+        if (pc.iceGatheringState === "complete") return resolve();
+        const timer = setTimeout(resolve, 3000);
+        pc.onicegatheringstatechange = () => {
+          if (pc.iceGatheringState === "complete") {
+            clearTimeout(timer);
+            resolve();
+          }
+        };
+      });
+      setStatus("正在交换连接信息…");
+      const res = await fetch("/call", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sdp: pc.localDescription.sdp }),
+      });
+      const msg = await res.json();
+      if (!res.ok || msg.error) throw new Error(msg.error || "交换连接信息失败");
+      await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+      setStatus("正在找通路");
+    }
+
+    startBtn.addEventListener("click", () => start().catch((e) => {
+      setStatus(cameraError(e));
+      startBtn.disabled = false;
+    }));
+    watchRemote();
+    window.setInterval(pollStats, 1000);
+
+    reportCodecs();
+    fetch("/config").then((r) => r.json()).then((c) => {
+      cfg = c;
+      modeEl.textContent = c.relay
+        ? "请改用终端里打印的 https 地址。"
+        : "电脑 " + c.lanIP;
+      if (new URLSearchParams(location.search).get("auto") === "1") start();
+    }).catch(() => { modeEl.textContent = "没有读到连接配置"; });
+  </script>
+</body>
+</html>

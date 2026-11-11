@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>手机画面</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Noto Sans SC", sans-serif;
+      background: #eef2f7;
+      color: #1c2430;
+    }
+    .wrap { max-width: 880px; margin: 0 auto; padding: 16px 20px 24px; }
+    header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    h1 { margin: 0; font-size: 24px; font-weight: 650; letter-spacing: 0.02em; }
+    #st { margin: 0; color: #5c6b80; font-size: 14px; }
+    .stage {
+      width: fit-content;
+      max-width: 100%;
+      margin: 0 auto;
+      background: white;
+      border-radius: 16px;
+      padding: 10px;
+      box-shadow: 0 8px 24px rgba(24, 48, 88, 0.08);
+    }
+    .frame {
+      position: relative;
+      background: #111;
+      border-radius: 12px;
+      overflow: hidden;
+      width: min(420px, calc(100vw - 80px), calc((100vh - 430px) * 3 / 4));
+      aspect-ratio: 3 / 4;
+    }
+    img, .wait {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+    .wait {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #bbb;
+      font-size: 16px;
+    }
+    .cap {
+      position: absolute;
+      left: 10px;
+      bottom: 10px;
+      margin: 0;
+      padding: 4px 8px;
+      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.55);
+      color: white;
+      font-size: 13px;
+    }
+    .controls {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .controls button {
+      border: 0;
+      border-radius: 12px;
+      padding: 12px;
+      font-size: 16px;
+      background: #1f4e9e;
+      color: white;
+    }
+    .controls button.off {
+      background: white;
+      color: #1f4e9e;
+      box-shadow: inset 0 0 0 1.5px #1f4e9e;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .stats div {
+      background: white;
+      border-radius: 12px;
+      padding: 12px 8px 10px;
+      text-align: center;
+      box-shadow: 0 8px 24px rgba(24, 48, 88, 0.06);
+    }
+    .stats span { display: block; color: #6b7a8d; font-size: 12px; }
+    .stats b {
+      display: block;
+      margin-top: 4px;
+      font-size: 18px;
+      font-weight: 650;
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>手机画面</h1>
+      <p id="st">还没有通话</p>
+    </header>
+    <section class="stage">
+      <div class="frame">
+        <div class="wait" id="wait">等待手机画面</div>
+        <img id="pic" alt="手机画面" hidden>
+        <p class="cap">手机画面</p>
+      </div>
+    </section>
+    <section class="controls" aria-label="音频">
+      <button id="mic" type="button" aria-pressed="true">麦克风</button>
+      <button id="spk" type="button" aria-pressed="true">扬声器</button>
+    </section>
+    <section class="stats" aria-label="手机画面参数">
+      <div><span>帧率</span><b id="fps">—</b></div>
+      <div><span>分辨率</span><b id="res">—</b></div>
+      <div><span>丢包</span><b id="lost">—</b></div>
+      <div><span>丢包率</span><b id="loss">—</b></div>
+      <div><span>码率</span><b id="rate">—</b></div>
+      <div><span>编码</span><b id="codec">—</b></div>
+    </section>
+  </div>
+  <script>
+    const st = document.querySelector("#st");
+    const pic = document.querySelector("#pic");
+    const wait = document.querySelector("#wait");
+    const fpsEl = document.querySelector("#fps");
+    const resEl = document.querySelector("#res");
+    const lostEl = document.querySelector("#lost");
+    const lossEl = document.querySelector("#loss");
+    const rateEl = document.querySelector("#rate");
+    const codecEl = document.querySelector("#codec");
+    const micBtn = document.querySelector("#mic");
+    const spkBtn = document.querySelector("#spk");
+
+    function paintAudio(on, button, name) {
+      button.classList.toggle("off", !on);
+      button.setAttribute("aria-pressed", on ? "true" : "false");
+      button.textContent = on ? name : name + "已关";
+    }
+
+    let audioHold = 0;
+    function setAudio(patch) {
+      audioHold = Date.now() + 800;
+      if (patch.mic !== undefined) paintAudio(patch.mic, micBtn, "麦克风");
+      if (patch.speaker !== undefined) paintAudio(patch.speaker, spkBtn, "扬声器");
+      fetch("/audio", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      }).catch(() => {});
+    }
+    micBtn.addEventListener("click", () => setAudio({ mic: micBtn.getAttribute("aria-pressed") !== "true" }));
+    spkBtn.addEventListener("click", () => setAudio({ speaker: spkBtn.getAttribute("aria-pressed") !== "true" }));
+
+    function codecName(v) {
+      if (!v) return "—";
+      const name = String(v).split("/")[1] || v;
+      return name.replace("video/", "").toUpperCase();
+    }
+
+    async function tick() {
+      try {
+        const s = await fetch("/status").then((r) => r.json());
+        st.textContent = s.ice || "尚未通话";
+        if (s.preview) {
+          const next = new Image();
+          next.onload = () => {
+            pic.src = next.src;
+            wait.hidden = true;
+            pic.hidden = false;
+          };
+          next.src = "/preview.jpg?t=" + Date.now();
+        }
+        const has = (s.inPackets || 0) > 0;
+        fpsEl.textContent = has ? String(Math.round(s.inFps || 0)) : "—";
+        resEl.textContent = s.inWidth && s.inHeight ? s.inWidth + "×" + s.inHeight : "—";
+        lostEl.textContent = has ? String(s.inLost || 0) : "—";
+        lossEl.textContent = has ? Number(s.inLoss || 0).toFixed(1) + "%" : "—";
+        const kbps = Number(s.inKbps || 0);
+        rateEl.textContent = has
+          ? (kbps >= 1000 ? (kbps / 1000).toFixed(1) + " Mbps" : Math.round(kbps) + " kbps")
+          : "—";
+        codecEl.textContent = has ? codecName(s.codec) : "—";
+        if (Date.now() > audioHold) {
+          if (typeof s.mic === "boolean") paintAudio(s.mic, micBtn, "麦克风");
+          if (typeof s.speaker === "boolean") paintAudio(s.speaker, spkBtn, "扬声器");
+        }
+      } catch (e) {
+        st.textContent = "状态暂时读不到";
+      }
+    }
+    tick();
+    setInterval(tick, 200);
+  </script>
+</body>
+</html>
